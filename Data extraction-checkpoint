@@ -1,0 +1,556 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Judging a book by its synopsis - data extraction\n",
+    "\n",
+    "- Book data was extracted from the retailer Waterstones via their website www.waterstones.co.uk. \n",
+    "\n",
+    "\n",
+    "- Waterstones's data was chosen as:\n",
+    " - its metadata includes the BIC subject category classification (Waterstones Booksellers Ltd, 2021)\n",
+    " - the data was easily obtained unlike for other retailers which had captchas set in place to stop data scraping\n",
+    " - there are no T&C's attached to the access and usage of data on Waterstones's website\n",
+    " \n",
+    " \n",
+    "- For practical & ethical reasons the amount of data to be extracted was limited. A web crawler was created to extract metadate (title, synopsis, ISBN code and subject category) from the first 32 results pages for each subject category with the aim of extracting data from around X books per category.\n",
+    "\n",
+    "\n",
+    "- Waterstones does not have any 'acceptable use policy' or other similar terms and conditions listed on its website. Nonetheless I have limited my request for data to small volumes so as not to compromise the server. Furthermore the data extracted is not personal data and will be used only for academic purposes and not for commerical gain.\n",
+    "\n",
+    "\n",
+    "- A web crawler was created to extract the data. Bestselling books were selected in each of the selected categories as low selling books may not be representative of the subject category or be incorrectly assigned."
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## Contents\n",
+    "\n",
+    "1. Python set up\n",
+    "2. Data extraction\n",
+    "4. Data preparation"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 1. Python set up\n",
+    "Load all the required Python packages and other set-up requirements for code to run as required."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Data manipulation\n",
+    "import pandas as pd\n",
+    "from copy import copy\n",
+    "import re\n",
+    "import string\n",
+    "from functools import reduce\n",
+    "\n",
+    "# Numeric manipulation\n",
+    "import numpy as np\n",
+    "import math\n",
+    "\n",
+    "# Charts\n",
+    "import matplotlib.pyplot as plt\n",
+    "import matplotlib.gridspec as gridspec\n",
+    "import seaborn as sns\n",
+    "import matplotlib.pylab as plt1\n",
+    "# Installed wordcloud in a terminal in Jupyter with this powershell command:\n",
+    "# PS C:\\Users\\jmd05\\Documents>cd C:\\Users\\jmd05\\anaconda3\n",
+    "# PS C:\\Users\\jmd05\\anaconda3\\> conda install -c conda-forge wordcloud=1.6.0 \n",
+    "\n",
+    "# Web scraping & APIs\n",
+    "headers={\"User-Agent\": \"Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36\"}\n",
+    "from bs4 import BeautifulSoup\n",
+    "import requests\n",
+    "from isbnlib import meta, desc, info, is_isbn13, classify\n",
+    "from isbnlib.registry import bibformatters\n",
+    "import time\n",
+    "\n",
+    "# NLP\n",
+    "import nltk\n",
+    "from nltk import sent_tokenize, word_tokenize\n",
+    "from nltk.corpus import stopwords, webtext\n",
+    "from nltk.probability import FreqDist\n",
+    "from wordcloud import WordCloud \n",
+    "from sklearn.feature_extraction.text import TfidfVectorizer, TfidfTransformer, CountVectorizer\n",
+    "from scipy.spatial import distance_matrix\n",
+    "from nltk.stem import WordNetLemmatizer\n",
+    "# Map any punctuation characters to white space\n",
+    "translator=str.maketrans(string.punctuation, ' '*len(string.punctuation)) \n",
+    "\n",
+    "# Other\n",
+    "import warnings"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 2. Data extraction"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def waterstones_crawler(url,subject,max_pages):\n",
+    "    '''\n",
+    "    This function crawls through the web page supplied in the function call \n",
+    "    pulling the required metadata from each book on the page using\n",
+    "    get_book_info() defined below\n",
+    "    '''\n",
+    "    book_data=[]\n",
+    "    page=1\n",
+    "    # Loop through the pages of results for each URL\n",
+    "    while page<=max_pages:   \n",
+    "        # Get all the text from the current page of results\n",
+    "        url1=url+str(page)\n",
+    "        source_code=requests.get(url1,headers)\n",
+    "        plain_text=source_code.text\n",
+    "        plain_text_clean=plain_text.strip()\n",
+    "        soup=BeautifulSoup(plain_text_clean,'html')   \n",
+    "        # Extract the title, synopsis, subject category & ISBN \n",
+    "        # of each individual book on current page using function get_item_desc\n",
+    "        for link in soup.find_all('a', {'class':'title link-invert dotdotdot'}):\n",
+    "            href='https://www.waterstones.com'+link.get('href')\n",
+    "            book_info=get_book_info(href,subject)\n",
+    "            book_data.append(book_info)  \n",
+    "        page+=1\n",
+    "    return book_data\n",
+    "\n",
+    "# Extract the required data for an individual book\n",
+    "def get_book_info(item_url,subject):\n",
+    "    # Get all the text from the current book link\n",
+    "    source_code=requests.get(item_url,headers)\n",
+    "    plain_text=source_code.text\n",
+    "    plain_text_clean=plain_text.strip()\n",
+    "    soup=BeautifulSoup(plain_text_clean)\n",
+    "    # Get title\n",
+    "    title=soup.find('span',{'class':'book-title'}).string\n",
+    "    # Get synopsis\n",
+    "    synopsis=soup.find('div', {'itemprop':'description', 'id':'scope_book_description'}).find_all('p')\n",
+    "    # Get subject category \n",
+    "    subject=subject\n",
+    "    # Get ISBN\n",
+    "    isbn=soup.find('span',{'itemprop':'isbn'}).string\n",
+    "    return title, synopsis, subject, isbn\n",
+    "\n",
+    "# Extract book information for 8 selected subject categoris\n",
+    "spor=waterstones_crawler('https://www.waterstones.com/category/sports-leisure/sortmode/bestselling/page/','sports-leisure',16)\n",
+    "hist=waterstones_crawler('https://www.waterstones.com/category/history/sortmode/bestselling/page/','history',16)\n",
+    "roma=waterstones_crawler('https://www.waterstones.com/category/romantic-fiction/sortmode/bestselling/page/','romantic-fiction',16)\n",
+    "reli=waterstones_crawler('https://www.waterstones.com/category/spirituality-beliefs/sortmode/bestselling/page/','spirituality-beliefs',16)\n",
+    "scie=waterstones_crawler('https://www.waterstones.com/category/science-technology-medicine/sortmode/bestselling/page/','science-technology-medicine',16)  \n",
+    "food=waterstones_crawler('https://www.waterstones.com/category/food-drink/sortmode/bestselling/page/','food-drink',16)\n",
+    "busi=waterstones_crawler('https://www.waterstones.com/category/business-finance-law/sortmode/bestselling/page/','business-finance-law',16)  \n",
+    "ente=waterstones_crawler('https://www.waterstones.com/category/entertainment/sortmode/bestselling/page/','entertainment',13)\n",
+    "\n",
+    "# Bring together all data into one dataframe & save as csv\n",
+    "df_spor=pd.DataFrame(spor,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_hist=pd.DataFrame(hist,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_roma=pd.DataFrame(roma,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_reli=pd.DataFrame(reli,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_scie=pd.DataFrame(scie,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_food=pd.DataFrame(food,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_busi=pd.DataFrame(busi,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "df_ente=pd.DataFrame(ente,columns=['Title','Synopsis','Subject','ISBN'])\n",
+    "list_all = [df_spor, df_hist, df_roma, df_reli, df_scie, df_food, df_busi, df_ente] \n",
+    "df_all_16 = pd.concat(list_all,ignore_index=True)\n",
+    "df_all_16.to_csv(\"all_16.csv\")"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "## 3. Data preparation\n",
+    "It is important to clean the data ahead of any exploratory analysis or application of algorithms. For example, mixed-type fields could cause an algorithm to interpret a field incorrectly. For the book data I need to ensure only the correct type of characters are present, the data is fully populated and that issues of duplication and text length are addressed. The following cleaning steps are undertaken:\n",
+    "\n",
+    "    a. Clean text files \n",
+    "    b. Clean numeric files\n",
+    "    c. Treat missing values\n",
+    "    d. Split synopsis into individual words & remove redundant words\n",
+    "    e. Lemmatize words\n",
+    "    f. Remove outliers\n",
+    "    g. Remove books assigned to more than one subject category\n",
+    "    h. Review a cleaned data case"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "df=pd.read_csv(\"all_16.csv\", index_col=0, dtype = str)\n",
+    "df.shape"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### a. Clean text fields\n",
+    "Undertake basic cleaning to remove superfluous characters from strings. "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "def text_clean(df):\n",
+    "    for i in df.columns:\n",
+    "        # Remove leading & trailing white space & EOF markings\n",
+    "        df[i]=df[i].map(lambda x: x.strip()) \n",
+    "        # Remove HTML tags\n",
+    "        df[i]=df[i].apply(lambda x: re.sub('<[^<]+?\\>',' ',x))\n",
+    "        # Replace punctuation characters with a single white space\n",
+    "        df[i]=df[i].apply(lambda x: x.translate(translator))\n",
+    "        # Replace consecutive white spaces with a single white space\n",
+    "        df[i]=df[i].apply(lambda x: re.sub('\\s+',' ',x))\n",
+    "        # Remove leading & trailing white space & EOF markings\n",
+    "        df[i]=df[i].map(lambda x: x.strip()) \n",
+    "        # Set all features to one case to ensure consistent treatment of characters on-going\n",
+    "        df[i]=df[i].str.lower()                               \n",
+    "        # Remove superfluous book-type descriptor\n",
+    "        df[i] = df[i].map(lambda x: x.replace(\"paperback\",\"\").replace(\"hardback\",\"\")) \n",
+    "    return df\n",
+    "\n",
+    "df1=df.copy()\n",
+    "df1=text_clean(df1)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### b. Clean numeric fields\n",
+    "Check that ISBN is not corrupted with alphabetical characters & of the required length."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check for erraneous non-numeric characters in 'ISBN'\n",
+    "def is_num(z):\n",
+    "    try:\n",
+    "        int(z)\n",
+    "    except ValueError:\n",
+    "        return False\n",
+    "    else:\n",
+    "        return True\n",
+    "    \n",
+    "isbn_num_chk=df1['ISBN'].apply(lambda x: is_num(x))\n",
+    "isbn_num_chk.value_counts()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check for length of ISBN\n",
+    "# Should be 10 digits for books published before 2006 & 13 digits for books published after\n",
+    "isbn_len_chk=df1['ISBN'].apply(lambda x: len(str(x)))\n",
+    "isbn_len_chk.value_counts(dropna=False)"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### c. Treat missing values\n",
+    "Missing synopsis data cannot be inferred so it needs to be populated using alternative sources of data. Extract data from free APIs - Google Books, Wikipedia & OpenLibrary - through the isbnlib package - with ISBN being the match key for the join."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check for missing data\n",
+    "\n",
+    "dic={}\n",
+    "for i in df1.columns:\n",
+    "    dic[i]=len(df1[df1[i]==''])\n",
+    "print(dic)\n",
+    "\n",
+    "# 119/768 (15%) of titles have missing synopsis\n",
+    "# As this is a significant number will need to populate from another data source"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Using time.sleep() function here to reduce the possibility of a HTTPError warning (4 minute run time)\n",
+    "def get_synopsis(synopsis, isbn):\n",
+    "    '''\n",
+    "    Check if the synopsis field of a book is missing and if so\n",
+    "    to populate it from one of three open source book libraries\n",
+    "    '''\n",
+    "    if synopsis=='':\n",
+    "            time.sleep(2)\n",
+    "            Service='wiki'\n",
+    "            Wiki=desc(isbn)\n",
+    "            if Wiki!='':\n",
+    "                return Wiki\n",
+    "            else:\n",
+    "                Service='goob'\n",
+    "                Goob=desc(isbn)\n",
+    "                if Goob!='':\n",
+    "                    return Goob\n",
+    "                else:\n",
+    "                    Service='openl'\n",
+    "                    Openl=desc(isbn)\n",
+    "                    if Openl!='':\n",
+    "                        return Openl\n",
+    "                    else:\n",
+    "                        return '' \n",
+    "    else:\n",
+    "        return synopsis\n",
+    "    \n",
+    "df1['Synopsis']=df1.apply(lambda x: get_synopsis(x['Synopsis'],x['ISBN']), axis=1)\n",
+    "\n",
+    "# Clean the data as per (4)(A) above\n",
+    "df2=df1.copy()\n",
+    "df2=text_clean(df2)\n",
+    "\n",
+    "# Check population rate\n",
+    "print(len(df2[df2['Synopsis']=='']))\n",
+    "# 19/768 (2%) of titles still have missing synopsis"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Drop books with no synopsis\n",
+    "df2=df2.loc[df2.Synopsis != '']\n",
+    "df2.shape"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### d. Split synopsis into individual words & remove redundant words\n",
+    "- Using stop words, remove words which are abundant across all books like 'a' & 'the' and have no unique value for analysis. Also removed the word 'book' which appears in most synopses as an unnecessary reference to itself\n",
+    "- For practical reasons also removed words which contain digits"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Get standard stop words in English \n",
+    "stop=stopwords.words('english')\n",
+    "\n",
+    "# Split words in each synopsis, remove stop words & remove words containing digits\n",
+    "df2['Synopsis1']=df2['Synopsis'].str.split().apply(lambda x: [item for item in x if item not in stop and item!='book']).apply(lambda x: [item for item in x if item.isalpha()])"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### e. Lemmatize words\n",
+    "Here I want to reduce the number of words that comprise the same information. For ease of interpretation we can use a lemmatization technique to stem words to their root word but whereby the root which is an actual word, unlike for other stemming approaches"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "wordnet_lemmatizer = WordNetLemmatizer()\n",
+    "\n",
+    "def lemmatize(x):\n",
+    "    lem_list=[]\n",
+    "    for word in x:\n",
+    "        lem_list.append(wordnet_lemmatizer.lemmatize(word, pos=\"v\"))\n",
+    "    return lem_list\n",
+    "\n",
+    "df2['Synopsis2']=df2['Synopsis1'].apply(lambda x: lemmatize(x))"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### f. Remove outliers \n",
+    "The chart & table below shows the distribution of synopsis lengths being normally distribution with similar mean and median but with a slight right skew. From an analysis perspective a long synopsis will provide more information on the subject matter of a book than a shorter one. Around 4% of books have a synopsis of less than 30 words (which is approximately the mean minus 1.7 standard deviations) which could make text similarity analysis less robust for these books. So it was decided to remove these books from the analysis."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {
+    "scrolled": true
+   },
+   "outputs": [],
+   "source": [
+    "# Plot distribution of synopsis lengths\n",
+    "\n",
+    "# Calculate length of synopsis without stop words for each book\n",
+    "df2['Synopsis2_len']=df2['Synopsis2'].map(len)\n",
+    "\n",
+    "#Plot histogram\n",
+    "plt.figure(figsize=(11,5))\n",
+    "plt.style.use('ggplot')\n",
+    "n = math.ceil((df2['Synopsis2_len'].max() - df2['Synopsis2_len'].min())/20)\n",
+    "plt.hist(df2['Synopsis2_len'], bins=n, edgecolor='black', linewidth=1.2)\n",
+    "x=np.arange(0, 300, 20)\n",
+    "xlabels = [f'{label:,}' for label in x]\n",
+    "plt.xticks(x, xlabels)\n",
+    "plt.xlim([0,300])\n",
+    "plt.title(\"Distribution of books by length of synopsis\",fontsize=15)\n",
+    "plt.xlabel(\"No. of words (excl. stop words)\", fontsize=13)\n",
+    "plt.ylabel(\"No. of books\", fontsize=13)\n",
+    "plt.show()"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Identify & remove outliers\n",
+    "stats1=df2['Synopsis2_len'].describe(percentiles=[0.01,0.02,0.03,0.04,0.05,0.25,0.5,0.75,0.9,0.99,1]).to_frame()\\\n",
+    ".reset_index().rename(columns = {'index':'Statistic', 'Synopsis2_len':'No. words'})\n",
+    "stats1['No. words']=stats1['No. words'].round().map(int)\n",
+    "stats1[1:]"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Drop books with synopsis less than 30 words\n",
+    "df2=df2.loc[df2.Synopsis2_len >= 30]\n",
+    "df2.shape\n",
+    "# Removed 34 books"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### g. Remove books assigned to more than one subject category \n",
+    "As multinomial classification models assume that each 'data case' is only assigned to one 'class' it is necessary to dedupe the books in the data to ensure each is assigned to only one subject category. One of the limitations of my POC is that this does compromise the BIC system which allows manual assignment to multiple categories - it recommends a maximum of three subject categories being selected- however this issue is ameliorated due to 91% of books being assigned to only one subject category."
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Check that proportion of books appearing in multiple subject categories\n",
+    "freq=df2.ISBN.value_counts(dropna=False)\n",
+    "freq.value_counts(dropna=False, normalize=True)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Dedupe those which appear in multiple subject categories\n",
+    "df3=df2.drop_duplicates(subset=[\"Title\",\"ISBN\"])\n",
+    "df3.shape\n",
+    "# Removed 59 books"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "#### h. Review a cleaned observation\n",
+    "An example of the revised data shows the extent of the cleaning undertaken, notably the reduction in length of the synopsis  "
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "print('Title before cleaning    : '+df.Title[4])\n",
+    "print('Title after cleaning     : '+df3.Title[4])\n",
+    "print('')\n",
+    "print('Subject before cleaning  : '+df.Subject[4])\n",
+    "print('Subject after cleaning   : '+df3.Subject[4])\n",
+    "print('')\n",
+    "print('ISBN before cleaning     : '+df.ISBN[4])\n",
+    "print('ISBN after cleaning      : '+df3.ISBN[4])\n",
+    "print('')\n",
+    "print('Synopsis before cleaning : '+df.Synopsis[4])\n",
+    "print('')\n",
+    "print('Synopsis after cleaning  : '+' '.join(sub for sub in df3.Synopsis2[4]))"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# Save cleaned data\n",
+    "df3.to_csv(all_16_clean.csv\")"
+   ]
+  }
+ ],
+ "metadata": {
+  "kernelspec": {
+   "display_name": "Python 3",
+   "language": "python",
+   "name": "python3"
+  },
+  "language_info": {
+   "codemirror_mode": {
+    "name": "ipython",
+    "version": 3
+   },
+   "file_extension": ".py",
+   "mimetype": "text/x-python",
+   "name": "python",
+   "nbconvert_exporter": "python",
+   "pygments_lexer": "ipython3",
+   "version": "3.8.5"
+  }
+ },
+ "nbformat": 4,
+ "nbformat_minor": 4
+}
